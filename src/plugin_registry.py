@@ -1,240 +1,112 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Plugin Registry - 插件注册表
+Plugin Registry - External plugin discovery and loading
 
-插件发现和管理，灵感来源: claw-code/src/port_manifest.py
+Inspired by claw-code's plugin system:
+- Discover plugins from paths
+- Plugin lifecycle management
+- Tool registration from plugins
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Callable, Any, Optional
-from enum import Enum
+
 import logging
-
-
-class PortType(Enum):
-    """端口类型"""
-    CODE_GENERATOR = "code_generator"     # 代码生成
-    FILE_OPERATOR = "file_operator"       # 文件操作
-    TEST_RUNNER = "test_runner"         # 测试运行
-    DEPLOYER = "deployer"              # 部署
-    ANALYZER = "analyzer"              # 分析
-    CUSTOM = "custom"                  # 自定义
-
-
-@dataclass
-class Port:
-    """
-    端口定义 - 插件暴露的能力接口
-    """
-    name: str
-    port_type: PortType
-    description: str
-    handler: Callable[..., Any]
-    schema: dict = field(default_factory=dict)
-    enabled: bool = True
+import importlib.util
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 
 @dataclass
 class Plugin:
     """
-    插件定义
+    Plugin definition.
+
+    Attributes:
+        id: Unique plugin identifier
+        name: Human-readable name
+        version: Plugin version
+        description: Plugin description
+        tools: Tools provided by plugin
+        on_load: Optional load callback
+        on_unload: Optional unload callback
     """
+    id: str
     name: str
-    version: str
-    description: str
-    author: str = ""
-    ports: list[Port] = field(default_factory=list)
-    dependencies: list[str] = field(default_factory=list)
-    metadata: dict = field(default_factory=dict)
-    
-    def __post_init__(self):
-        # 为每个port设置plugin信息
-        for port in self.ports:
-            port.metadata["plugin"] = self.name
-
-
-@dataclass
-class PluginInfo:
-    """插件信息"""
-    name: str
-    version: str
-    description: str
-    ports: list[str]
-    enabled: bool = True
+    version: str = "1.0.0"
+    description: str = ""
+    tools: List[str] = field(default_factory=list)
+    on_load: Callable = None
+    on_unload: Callable = None
 
 
 class PluginRegistry:
     """
-    插件注册表
-    
-    管理所有插件的注册、发现和生命周期
-    """
-    
-    def __init__(self):
-        self.plugins: dict[str, Plugin] = {}
-        self.ports: dict[str, Port] = {}  # port_name -> Port
-        self.logger = logging.getLogger(__name__)
-        self._register_builtin_ports()
-    
-    def _register_builtin_ports(self):
-        """注册内置端口"""
-        self.register_port(Port(
-            name="builtin.echo",
-            port_type=PortType.CUSTOM,
-            description="内置回显端口",
-            handler=lambda ctx, **kw: {"echo": kw.get("message", "")}
-        ))
-    
-    def register(self, plugin: Plugin) -> None:
-        """
-        注册插件
-        
-        Args:
-            plugin: 插件实例
-        """
-        if plugin.name in self.plugins:
-            self.logger.warning(f"Plugin {plugin.name} already registered, replacing")
-        
-        self.plugins[plugin.name] = plugin
-        
-        # 注册所有端口
-        for port in plugin.ports:
-            self.ports[port.name] = port
-        
-        self.logger.info(f"Registered plugin: {plugin.name} v{plugin.version}")
-    
-    def unregister(self, name: str) -> bool:
-        """
-        注销插件
-        
-        Args:
-            name: 插件名称
-            
-        Returns:
-            bool: 是否成功
-        """
-        if name not in self.plugins:
-            return False
-        
-        plugin = self.plugins.pop(name)
-        
-        # 注销所有端口
-        ports_to_remove = [
-            port_name for port_name, port in self.ports.items()
-            if port.metadata.get("plugin") == name
-        ]
-        for port_name in ports_to_remove:
-            self.ports.pop(port_name)
-        
-        self.logger.info(f"Unregistered plugin: {name}")
-        return True
-    
-    def get_plugin(self, name: str) -> Optional[Plugin]:
-        """获取插件"""
-        return self.plugins.get(name)
-    
-    def get_port(self, name: str) -> Optional[Port]:
-        """获取端口"""
-        return self.ports.get(name)
-    
-    def find_ports(self, port_type: PortType) -> list[Port]:
-        """查找指定类型的端口"""
-        return [
-            port for port in self.ports.values()
-            if port.port_type == port_type and port.enabled
-        ]
-    
-    def list_plugins(self) -> list[PluginInfo]:
-        """列出所有插件"""
-        return [
-            PluginInfo(
-                name=p.name,
-                version=p.version,
-                description=p.description,
-                ports=[port.name for port in p.ports],
-                enabled=all(port.enabled for port in p.ports)
-            )
-            for p in self.plugins.values()
-        ]
-    
-    def list_ports(self, plugin_name: str = None) -> list[Port]:
-        """列出端口"""
-        if plugin_name:
-            return [
-                port for port in self.ports.values()
-                if port.metadata.get("plugin") == plugin_name
-            ]
-        return list(self.ports.values())
-    
-    def enable_plugin(self, name: str) -> bool:
-        """启用插件"""
-        if name not in self.plugins:
-            return False
-        for port in self.plugins[name].ports:
-            port.enabled = True
-        return True
-    
-    def disable_plugin(self, name: str) -> bool:
-        """禁用插件"""
-        if name not in self.plugins:
-            return False
-        for port in self.plugins[name].ports:
-            port.enabled = False
-        return True
-    
-    def call_port(self, port_name: str, context: dict, **kwargs) -> Any:
-        """
-        调用端口
-        
-        Args:
-            port_name: 端口名称
-            context: 执行上下文
-            **kwargs: 传递给handler的参数
-            
-        Returns:
-            Any: 端口执行结果
-        """
-        port = self.get_port(port_name)
-        if not port:
-            raise ValueError(f"Port not found: {port_name}")
-        
-        if not port.enabled:
-            raise RuntimeError(f"Port is disabled: {port_name}")
-        
-        return port.handler(context, **kwargs)
+    Plugin discovery and management.
 
+    Discovers plugins from:
+    - Built-in plugins
+    - plugins/ directory
+    - PYTHONPATH
+    """
 
-def plugin(name: str, version: str, description: str):
-    """
-    插件装饰器
-    
-    用法:
-        @plugin("my_plugin", "1.0.0", "My plugin description")
-        class MyPlugin(Plugin):
-            ...
-    """
-    def decorator(cls):
-        cls.name = name
-        cls.version = version
-        cls.description = description
-        return cls
-    return decorator
+    def __init__(self, plugins_dir: str = None):
+        self.plugins_dir = Path(plugins_dir or "./plugins")
+        self.plugins: Dict[str, Plugin] = {}
+        self._logger = logging.getLogger(__name__)
 
+    def discover_plugins(self) -> int:
+        """Discover plugins from directory"""
+        if not self.plugins_dir.exists():
+            return 0
 
-def port(name: str, port_type: PortType, description: str):
-    """
-    端口装饰器
-    
-    用法:
-        @port("generate", PortType.CODE_GENERATOR, "生成代码")
-        def generate_code(context, **kwargs):
-            ...
-    """
-    def decorator(func):
-        func._port_name = name
-        func._port_type = port_type
-        func._port_description = description
-        return func
-    return decorator
+        count = 0
+        for plugin_path in self.plugins_dir.iterdir():
+            if plugin_path.is_dir() and (plugin_path / "__init__.py").exists():
+                try:
+                    plugin = self._load_plugin(plugin_path)
+                    if plugin:
+                        self.plugins[plugin.id] = plugin
+                        count += 1
+                except Exception as e:
+                    self._logger.warning(f"Failed to load plugin from {plugin_path}: {e}")
+
+        return count
+
+    def _load_plugin(self, plugin_path: Path) -> Optional[Plugin]:
+        """Load a plugin module"""
+        spec = importlib.util.spec_from_file_location(
+            f"plugins.{plugin_path.name}",
+            plugin_path / "__init__.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+
+        if hasattr(module, "plugin"):
+            return module.plugin
+        return None
+
+    def get(self, plugin_id: str) -> Optional[Plugin]:
+        """Get plugin by ID"""
+        return self.plugins.get(plugin_id)
+
+    def list_plugins(self) -> List[Plugin]:
+        """List all plugins"""
+        return list(self.plugins.values())
+
+    def enable(self, plugin_id: str) -> bool:
+        """Enable a plugin"""
+        plugin = self.get(plugin_id)
+        if plugin and plugin.on_load:
+            plugin.on_load()
+            return True
+        return False
+
+    def disable(self, plugin_id: str) -> bool:
+        """Disable a plugin"""
+        plugin = self.get(plugin_id)
+        if plugin and plugin.on_unload:
+            plugin.on_unload()
+            return True
+        return False

@@ -1,208 +1,266 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-Query Engine - 查询引擎
+Query Engine - Intent understanding and routing
 
-意图理解和路由分发
-灵感来源: claw-code/src/query_engine.py
+Inspired by claw-code's query processing:
+- Pattern-based intent classification
+- Complexity assessment
+- Tool selection
+- Execution planning
+
+Query Lifecycle:
+    parse -> classify -> assess -> plan -> route
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Optional, Callable
-from enum import Enum
+
 import logging
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 
 class QueryType(Enum):
-    """查询类型"""
+    """Query/intent classification"""
     CODE_GENERATION = "code_generation"
     CODE_UNDERSTANDING = "code_understanding"
     CODE_SEARCH = "code_search"
     CODE_MODIFICATION = "code_modification"
     PROJECT_QUERY = "project_query"
     SYSTEM_QUERY = "system_query"
+    TASK_QUERY = "task_query"
     UNKNOWN = "unknown"
 
 
 class Complexity(Enum):
-    """任务复杂度"""
-    TRIVIAL = "trivial"       # 简单操作
-    SIMPLE = "simple"         # 简单任务
-    MODERATE = "moderate"     # 中等任务
-    COMPLEX = "complex"       # 复杂任务
-    CRITICAL = "critical"    # 关键任务
+    """Task complexity levels"""
+    TRIVIAL = "trivial"      # Simple operation
+    SIMPLE = "simple"        # Single step
+    MODERATE = "moderate"     # Few steps
+    COMPLEX = "complex"      # Multiple steps
+    CRITICAL = "critical"    # Major undertaking
 
 
 @dataclass
 class QueryContext:
-    """查询上下文"""
+    """
+    Structured query context after analysis.
+
+    Attributes:
+        query: Original query string
+        query_type: Classified intent
+        complexity: Assessed complexity
+        requires_llm: Whether LLM is needed
+        tools_needed: Selected tools
+        estimated_steps: Estimated execution steps
+        metadata: Additional context
+    """
     query: str
     query_type: QueryType = QueryType.UNKNOWN
     complexity: Complexity = Complexity.MODERATE
     requires_llm: bool = False
-    tools_needed: list[str] = field(default_factory=list)
+    tools_needed: List[str] = field(default_factory=list)
     estimated_steps: int = 1
     metadata: dict = field(default_factory=dict)
 
 
-@dataclass  
+@dataclass
 class QueryResult:
-    """查询结果"""
+    """Result of query routing"""
     success: bool
     query_type: QueryType
     complexity: Complexity
     routing_path: str
     confidence: float
-    execution_plan: Optional[list[str]] = None
-    warnings: list[str] = field(default_factory=list)
+    execution_plan: Optional[List[str]] = None
+    warnings: List[str] = field(default_factory=list)
 
 
 class QueryEngine:
     """
-    查询引擎
-    
-    理解用户查询，决定执行路径
+    Query analysis and intent routing.
+
+    Inspired by claw-code's query processing:
+    - Pattern matching for intent classification
+    - Complexity scoring
+    - Tool selection based on intent
+    - Execution plan generation
+
+    The query engine is the "brain" that decides:
+    1. What the user wants to do
+    2. How complex it is
+    3. Which tools are needed
+    4. How to execute it
     """
-    
+
     def __init__(self, llm_enabled: bool = False):
         self.llm_enabled = llm_enabled
         self.logger = logging.getLogger(__name__)
-        
-        # 查询模式注册表
-        self.patterns: dict[QueryType, list[tuple[str, float]]] = {
+
+        # Intent patterns with weights
+        self._patterns: Dict[QueryType, List[tuple]] = {
             QueryType.CODE_GENERATION: [
-                ("创建", 0.9),
-                ("实现", 0.9),
-                ("生成代码", 0.95),
-                ("写一个", 0.8),
-                ("create", 0.9),
-                ("implement", 0.9),
-                ("generate", 0.9),
+                (r"create|implement|generate|write.*code|build.*new", 0.9),
+                (r"add.*feature|make.*function|develop", 0.85),
+                (r" scaffold | boilerplate | template ", 0.8),
             ],
             QueryType.CODE_MODIFICATION: [
-                ("修改", 0.9),
-                ("更新", 0.85),
-                ("编辑", 0.8),
-                ("modify", 0.9),
-                ("update", 0.85),
+                (r"modify|update|edit|change|refactor", 0.9),
+                (r"fix|repair|debug|patch", 0.85),
+                (r"improve|optimize|enhance", 0.8),
+                (r"rename|move|copy", 0.75),
             ],
             QueryType.CODE_UNDERSTANDING: [
-                ("理解", 0.9),
-                ("分析", 0.85),
-                ("解释", 0.9),
-                ("understand", 0.9),
-                ("analyze", 0.85),
+                (r"explain|understand|analyze|describe", 0.9),
+                (r"what.*does|how.*work|why.*is", 0.85),
+                (r"document|comment", 0.7),
             ],
             QueryType.CODE_SEARCH: [
-                ("搜索", 0.95),
-                ("查找", 0.9),
-                ("查找代码", 0.95),
-                ("search", 0.95),
-                ("find", 0.9),
+                (r"search|find|grep|locate|look.*up", 0.95),
+                (r"where.*is|find.*file|search.*for", 0.9),
             ],
             QueryType.PROJECT_QUERY: [
-                ("项目", 0.8),
-                ("结构", 0.75),
-                ("project", 0.8),
-                ("structure", 0.75),
+                (r"project.*structure|architecture|overview", 0.9),
+                (r"list.*file|tree.*view|show.*dir", 0.8),
             ],
             QueryType.SYSTEM_QUERY: [
-                ("状态", 0.9),
-                ("配置", 0.85),
-                ("system", 0.9),
-                ("config", 0.85),
-            ]
+                (r"status|health|diagnostic|check", 0.9),
+                (r"config|setting|preference", 0.85),
+                (r"version|info|about", 0.8),
+            ],
+            QueryType.TASK_QUERY: [
+                (r"task|job|to.do|assignment", 0.9),
+                (r"progress|status.*task", 0.85),
+            ],
         }
-        
-        # 复杂度关键词
-        self.complexity_keywords = {
-            Complexity.TRIVIAL: [r"简单", r"只是", r"just"],
-            Complexity.SIMPLE: [r"一个", r"单个", r"one"],
-            Complexity.MODERATE: [r"一些", r"多个", r"several"],
-            Complexity.COMPLEX: [r"复杂", r"多个", r"complex"],
-            Complexity.CRITICAL: [r"关键", r"重要", r"critical"],
+
+        # Complexity keywords
+        self._complexity_keywords = {
+            Complexity.TRIVIAL: [r"just|simply|quick", r"one.*file", r"single"],
+            Complexity.SIMPLE: [r"simple|easy|basic", r"one.*step", r"straightforward"],
+            Complexity.MODERATE: [r"several|some|multiple", r"few.*file", r"moderate"],
+            Complexity.COMPLEX: [r"complex|complicated|advanced", r"multiple.*component", r"several.*step"],
+            Complexity.CRITICAL: [r"critical|important|major", r"entire.*system", r"full.*rewrite"],
         }
-    
+
     def analyze(self, query: str) -> QueryContext:
         """
-        分析查询
-        
+        Analyze a query and return structured context.
+
         Args:
-            query: 用户查询
-            
+            query: Natural language query
+
         Returns:
-            QueryContext: 查询上下文
+            QueryContext with classified intent
         """
         self.logger.debug(f"Analyzing query: {query}")
-        
-        # 检测查询类型
-        query_type = self._classify_query(query)
-        
-        # 评估复杂度
+
+        # Classify intent
+        query_type = self._classify(query)
+
+        # Assess complexity
         complexity = self._assess_complexity(query)
-        
-        # 判断是否需要LLM
+
+        # Determine if LLM needed
         requires_llm = self._needs_llm(query_type, complexity)
-        
-        # 估算执行步骤
-        estimated_steps = self._estimate_steps(complexity)
-        
-        # 确定需要的工具
-        tools_needed = self._determine_tools(query_type, query)
-        
+
+        # Select tools
+        tools = self._select_tools(query_type, query)
+
+        # Estimate steps
+        steps = self._estimate_steps(complexity)
+
         return QueryContext(
             query=query,
             query_type=query_type,
             complexity=complexity,
             requires_llm=requires_llm,
-            tools_needed=tools_needed,
-            estimated_steps=estimated_steps
+            tools_needed=tools,
+            estimated_steps=steps
         )
-    
-    def _classify_query(self, query: str) -> QueryType:
-        """分类查询"""
+
+    def _classify(self, query: str) -> QueryType:
+        """Classify query intent using pattern matching"""
         query_lower = query.lower()
         best_match = QueryType.UNKNOWN
         best_score = 0.0
-        
-        for qtype, patterns in self.patterns.items():
+
+        for qtype, patterns in self._patterns.items():
             score = 0.0
             for pattern, weight in patterns:
-                if pattern.lower() in query_lower:
+                if re.search(pattern, query_lower):
                     score += weight
-            
+
             if score > best_score:
                 best_score = score
                 best_match = qtype
-        
+
+        self.logger.debug(f"Classified as {best_match.value} (confidence: {best_score:.2f})")
         return best_match
-    
+
     def _assess_complexity(self, query: str) -> Complexity:
-        """评估复杂度"""
-        for complexity, keywords in self.complexity_keywords.items():
+        """Assess task complexity"""
+        query_lower = query.lower()
+
+        for complexity, keywords in self._complexity_keywords.items():
             for keyword in keywords:
-                if keyword in query:
+                if re.search(keyword, query_lower):
                     return complexity
+
         return Complexity.MODERATE
-    
+
     def _needs_llm(self, query_type: QueryType, complexity: Complexity) -> bool:
-        """判断是否需要LLM"""
+        """Determine if LLM is needed for this query"""
         if not self.llm_enabled:
             return False
-        
-        # 代码生成通常需要LLM
-        if query_type in [QueryType.CODE_GENERATION, QueryType.CODE_UNDERSTANDING]:
+
+        # Code generation always benefits from LLM
+        if query_type == QueryType.CODE_GENERATION:
             return True
-        
-        # 复杂任务需要LLM
-        if complexity in [Complexity.COMPLEX, Complexity.CRITICAL]:
+
+        # Complex tasks need LLM
+        if complexity in (Complexity.COMPLEX, Complexity.CRITICAL):
             return True
-        
+
+        # Understanding tasks need LLM
+        if query_type == QueryType.CODE_UNDERSTANDING:
+            return complexity != Complexity.TRIVIAL
+
         return False
-    
+
+    def _select_tools(self, query_type: QueryType, query: str) -> List[str]:
+        """Select appropriate tools for the query"""
+        # Base tool selection by query type
+        tool_map = {
+            QueryType.CODE_GENERATION: ["editor", "linter"],
+            QueryType.CODE_MODIFICATION: ["editor", "linter", "tester"],
+            QueryType.CODE_UNDERSTANDING: ["reader", "analyzer"],
+            QueryType.CODE_SEARCH: ["searcher", "reader"],
+            QueryType.PROJECT_QUERY: ["explorer", "reader"],
+            QueryType.SYSTEM_QUERY: ["system_info"],
+            QueryType.TASK_QUERY: ["task_manager"],
+        }
+
+        tools = tool_map.get(query_type, ["generic"])
+
+        # Add context-sensitive tools
+        query_lower = query.lower()
+
+        if any(kw in query_lower for kw in ["test", "spec"]):
+            tools.append("tester")
+        if any(kw in query_lower for kw in ["deploy", "release", "build"]):
+            tools.append("builder")
+        if any(kw in query_lower for kw in ["git", "commit", "branch"]):
+            tools.append("git")
+        if any(kw in query_lower for kw in ["docker", "container"]):
+            tools.append("docker")
+        if any(kw in query_lower for kw in ["debug", "trace"]):
+            tools.append("debugger")
+
+        return list(set(tools))  # Remove duplicates
+
     def _estimate_steps(self, complexity: Complexity) -> int:
-        """估算执行步骤"""
+        """Estimate number of execution steps"""
         steps_map = {
             Complexity.TRIVIAL: 1,
             Complexity.SIMPLE: 2,
@@ -211,110 +269,178 @@ class QueryEngine:
             Complexity.CRITICAL: 8,
         }
         return steps_map.get(complexity, 3)
-    
-    def _determine_tools(self, query_type: QueryType, query: str) -> list[str]:
-        """确定需要的工具"""
-        tool_map = {
-            QueryType.CODE_GENERATION: ["editor", "linter"],
-            QueryType.CODE_MODIFICATION: ["editor", "linter", "tester"],
-            QueryType.CODE_UNDERSTANDING: ["reader", "analyzer"],
-            QueryType.CODE_SEARCH: ["searcher", "reader"],
-            QueryType.PROJECT_QUERY: ["explorer", "reader"],
-            QueryType.SYSTEM_QUERY: ["system_info"],
-        }
-        
-        base_tools = tool_map.get(query_type, ["generic"])
-        
-        # 根据关键词添加额外工具
-        if any(kw in query for kw in ["测试", "test"]):
-            base_tools.append("tester")
-        if any(kw in query for kw in ["部署", "deploy"]):
-            base_tools.append("deployer")
-        
-        return base_tools
-    
+
     def route(self, context: QueryContext) -> QueryResult:
         """
-        路由决策
-        
+        Generate routing decision and execution plan.
+
         Args:
-            context: 查询上下文
-            
+            context: Analyzed query context
+
         Returns:
-            QueryResult: 路由结果
+            QueryResult with routing path and plan
         """
-        # 生成路由路径
-        routing_path = self._generate_routing_path(context)
-        
-        # 生成执行计划
-        execution_plan = self._generate_plan(context)
-        
+        # Generate routing path
+        routing_path = f"engine.{context.query_type.value}.{context.complexity.value}"
+
+        # Generate execution plan
+        plan = self._generate_plan(context)
+
+        # Assess confidence
+        confidence = self._calculate_confidence(context)
+
+        # Generate warnings
+        warnings = self._generate_warnings(context)
+
         return QueryResult(
             success=True,
             query_type=context.query_type,
             complexity=context.complexity,
             routing_path=routing_path,
-            confidence=0.85,
-            execution_plan=execution_plan
+            confidence=confidence,
+            execution_plan=plan,
+            warnings=warnings
         )
-    
-    def _generate_routing_path(self, context: QueryContext) -> str:
-        """生成路由路径"""
-        return f"engine.{context.query_type.value}.{context.complexity.value}"
-    
-    def _generate_plan(self, context: QueryContext) -> list[str]:
-        """生成执行计划"""
+
+    def _generate_plan(self, context: QueryContext) -> List[str]:
+        """Generate execution plan"""
         plan = []
-        
-        # 1. 准备阶段
+
+        # Validation step
+        plan.append("validate_request")
+
+        # Preparation
         if context.tools_needed:
             plan.append(f"load_tools({','.join(context.tools_needed)})")
-        
-        # 2. 执行阶段
+
+        # LLM step if needed
         if context.requires_llm:
             plan.append("invoke_llm()")
-        
-        plan.append(f"execute_{context.query_type.value}()")
-        
-        # 3. 验证阶段
-        plan.append("validate_result()")
-        
+
+        # Query-type specific steps
+        type_steps = {
+            QueryType.CODE_GENERATION: [
+                "analyze_requirements",
+                "generate_code",
+                "validate_syntax",
+                "format_code"
+            ],
+            QueryType.CODE_MODIFICATION: [
+                "read_current_code",
+                "apply_modifications",
+                "validate_changes",
+                "format_code"
+            ],
+            QueryType.CODE_UNDERSTANDING: [
+                "read_files",
+                "analyze_structure",
+                "generate_explanation"
+            ],
+            QueryType.CODE_SEARCH: [
+                "execute_search",
+                "filter_results",
+                "present_findings"
+            ],
+            QueryType.PROJECT_QUERY: [
+                "explore_structure",
+                "analyze_architecture",
+                "generate_overview"
+            ],
+            QueryType.SYSTEM_QUERY: [
+                "gather_system_info",
+                "format_response"
+            ],
+            QueryType.TASK_QUERY: [
+                "query_task_registry",
+                "format_task_status"
+            ],
+        }
+
+        plan.extend(type_steps.get(context.query_type, ["execute_generic"]))
+
+        # Final validation
+        plan.append("validate_result")
+
         return plan
+
+    def _calculate_confidence(self, context: QueryContext) -> float:
+        """Calculate routing confidence"""
+        confidence = 0.7  # Base confidence
+
+        # Higher confidence for clear patterns
+        if context.query_type != QueryType.UNKNOWN:
+            confidence += 0.15
+
+        # Higher confidence for clear complexity signals
+        if context.complexity in (Complexity.TRIVIAL, Complexity.CRITICAL):
+            confidence += 0.1
+
+        # Lower confidence if LLM would help but not available
+        if context.requires_llm and not self.llm_enabled:
+            confidence -= 0.1
+
+        return min(confidence, 0.99)
+
+    def _generate_warnings(self, context: QueryContext) -> List[str]:
+        """Generate warnings for the execution"""
+        warnings = []
+
+        if context.requires_llm and not self.llm_enabled:
+            warnings.append("LLM recommended but not enabled - results may be limited")
+
+        if context.complexity == Complexity.CRITICAL:
+            warnings.append("This is a critical task - consider breaking it into smaller steps")
+
+        if len(context.tools_needed) > 4:
+            warnings.append("Many tools required - consider simplifying the request")
+
+        return warnings
 
 
 class SmartQueryEngine(QueryEngine):
     """
-    智能查询引擎 - 支持LLM增强
-    
-    在基础QueryEngine上添加LLM理解能力
+    LLM-enhanced query engine.
+
+    When an LLM client is available, uses it to:
+    - Improve intent classification
+    - Better complexity assessment
+    - More accurate tool selection
     """
-    
+
     def __init__(self, llm_client=None):
         super().__init__(llm_enabled=llm_client is not None)
         self.llm_client = llm_client
-    
+
     async def analyze_with_llm(self, query: str) -> QueryContext:
-        """使用LLM增强分析"""
+        """
+        Analyze query using LLM for better understanding.
+
+        Args:
+            query: Natural language query
+
+        Returns:
+            Enhanced QueryContext
+        """
         if not self.llm_client:
             return self.analyze(query)
-        
-        # LLM增强的意图理解
-        prompt = f"""
-分析以下开发任务，返回JSON格式的意图分析：
 
-任务: {query}
+        # Use LLM to analyze
+        prompt = f"""Analyze this development task and return a JSON object:
 
-请返回：
-- intent_type: 代码生成/代码理解/代码修改/代码搜索/项目查询/系统查询
-- complexity: 简单/中等/复杂/关键
-- required_tools: 需要的工具列表
-- suggested_steps: 建议的执行步骤
+Task: {query}
+
+Return JSON with:
+- query_type: one of [code_generation, code_understanding, code_search, code_modification, project_query, system_query]
+- complexity: one of [trivial, simple, moderate, complex, critical]
+- tools_needed: array of tool names
+- suggested_steps: number of estimated steps
+- rationale: brief explanation
 """
-        
-        # 调用LLM
-        response = await self.llm_client.complete(prompt)
-        
-        # 解析LLM响应
-        # ... 解析逻辑
-        
-        return self.analyze(query)
+
+        try:
+            response = await self.llm_client.complete(prompt)
+            # Parse response and create enhanced context
+            # For now, fall back to pattern matching
+            return self.analyze(query)
+        except Exception:
+            return self.analyze(query)

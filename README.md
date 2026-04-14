@@ -1,73 +1,158 @@
 # AI Coding Agent Framework
 
-> 基于claw-code架构的智能软件开发框架
+<p align="center">
+  <img src="assets/hero.png" alt="AI Coding Agent Framework" width="300" />
+</p>
 
-## 核心理念
+<p align="center">
+  <strong>A next-generation autonomous software development framework</strong>
+</p>
 
-```
-用户意图 → 智能解析 → 任务规划 → 工具执行 → 结果验证
-```
+<p align="center">
+  <a href="https://github.com/trigoldsun/AI-Skill-AICodingAgentFramework">
+    <img src="https://img.shields.io/badge/GitHub-Repository-blue" alt="GitHub">
+  </a>
+  <a href="./docs/PHILOSOPHY.md">
+    <img src="https://img.shields.io/badge/Philosophy-Events%20over%20Logs-green" alt="Philosophy">
+  </a>
+  <a href="./docs/ARCHITECTURE.md">
+    <img src="https://img.shields.io/badge/Architecture-Event%20Driven-orange" alt="Architecture">
+  </a>
+  <a href="./docs/ROADMAP.md">
+    <img src="https://img.shields.io/badge/Status-Roadmap%20v1.0-red" alt="Status">
+  </a>
+</p>
 
-## 架构设计
+---
+
+## Philosophy
+
+> **"Humans provide direction; agents perform the labor."**
+
+AI Coding Agent Framework is built on a fundamental insight: as coding agents become capable enough to rebuild codebases autonomously, the scarce resource shifts from typing speed to **architectural clarity**, **task decomposition**, and **judgment about what deserves to exist**.
+
+This framework demonstrates what happens when:
+- A human provides clear direction via natural language
+- Multiple coding agents coordinate in parallel
+- Event routing is pushed outside the agent context window
+- Planning, execution, review, and retry loops are automated
+- The human does **not** sit micromanaging every step
+
+## Core Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     AI Coding Agent Framework                       │
+│                    AI Coding Agent Framework                        │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐        │
-│  │   User CLI   │───▶│   Router     │───▶│   Engine     │        │
-│  └──────────────┘    └──────────────┘    └──────────────┘        │
-│         │                   │                   │                    │
-│         ▼                   ▼                   ▼                    │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐        │
-│  │   Parser     │    │   Query     │    │   Tool       │        │
-│  │   (意图理解)  │    │   Engine    │    │   Pool       │        │
-│  └──────────────┘    └──────────────┘    └──────────────┘        │
-│                              │                   │                    │
-│                              ▼                   ▼                    │
+│  │  Human CLI   │───▶│  Event Bus   │───▶│    Agent     │        │
+│  │  (Discord/   │    │  (clawhip)   │    │   Runtime    │        │
+│  │   Terminal)  │    └──────────────┘    └──────────────┘        │
+│  └──────────────┘           │                   │                 │
+│                              ▼                   ▼                 │
 │                      ┌──────────────┐    ┌──────────────┐        │
-│                      │   Task       │    │   Plugin     │        │
-│                      │   Manager    │    │   Registry   │        │
+│                      │    Task      │    │    Skill     │        │
+│                      │   Registry   │    │   Registry   │        │
 │                      └──────────────┘    └──────────────┘        │
+│                                                                     │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐        │
+│  │   Session     │    │   Tool       │    │  Permission  │        │
+│  │   Manager     │    │   Pool       │    │   Enforcer    │        │
+│  └──────────────┘    └──────────────┘    └──────────────┘        │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## 核心模块
+### Three-Layer System
 
-| 模块 | 说明 | 灵感来源 |
-|------|------|----------|
-| `Parser` | 自然语言解析 | claw-code query_engine |
-| `QueryEngine` | 意图理解和路由 | claw-code query_engine |
-| `ToolPool` | 动态工具管理 | claw-code tool_pool |
-| `PluginRegistry` | 插件注册发现 | claw-code port_manifest |
-| `TaskManager` | 任务规划和执行 | claw-code task |
-| `Runtime` | 运行时编排 | claw-code runtime |
-| `ExecutionRegistry` | 命令执行路由 | claw-code execution_registry |
+| Layer | Component | Responsibility |
+|-------|-----------|----------------|
+| **Coordination** | Event Bus | Event routing, notification delivery |
+| **Execution** | Agent Runtime | State machine, tool execution, session management |
+| **Capability** | Skill Registry | Composable, versioned skill definitions |
 
-## 快速开始
+## Features
 
-```python
-from agent_framework import Agent
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Natural Language Interface | ✅ | Direct human指令 via CLI or Discord |
+| Event-Driven Architecture | ✅ | Typed events over log scraping |
+| State Machine Lifecycle | ✅ | Explicit agent states (spawning → running → finished) |
+| Task Registry | ✅ | In-memory task lifecycle management |
+| Session Persistence | ✅ | JSONL + SQLite for resume across restarts |
+| Permission Enforcement | ✅ | read-only / workspace-write / danger-full-access |
+| Skill System | ✅ | Composable skill definitions with versioning |
+| Tool Pool | ✅ | Dynamic tool registration and execution |
+| Plugin Architecture | ✅ | External plugin discovery and loading |
+| Telemetry | ✅ | Usage tracking and cost estimation |
+| Slash Commands | ✅ | REPL commands: `/doctor`, `/compact`, `/skills`, etc. |
 
-agent = Agent(
-    name="dev-assistant",
-    model="claude-3-5-sonnet",
-    plugins=["code_generator", "file_operator", "git_manager"]
-)
+## Quick Start
 
-# 自然语言驱动
-result = agent.execute("创建一个用户认证的REST API")
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/trigoldsun/AI-Skill-AICodingAgentFramework.git
+cd AI-Skill-AICodingAgentFramework
+
+# Install dependencies
+pip install -e .
+
+# Verify setup
+python -m agent_framework doctor
 ```
 
-## 设计原则
+### Basic Usage
 
-1. **自然语言优先** - 用户描述需求，框架自动规划执行
-2. **插件化架构** - 能力通过插件动态扩展
-3. **工具池化** - 统一管理，智能选择
-4. **任务流编排** - 支持复杂多步骤任务
-5. **安全执行** - 沙箱隔离，权限控制
+```python
+from agent_framework import Agent, PermissionMode
+
+# Create an agent
+agent = Agent(
+    name="dev-assistant",
+    model="claude-sonnet-4",
+    permission_mode=PermissionMode.WORKSPACE_WRITE
+)
+
+# Natural language driven
+result = agent.execute("Create a REST API for user authentication")
+```
+
+### CLI Usage
+
+```bash
+# Interactive REPL
+python -m agent_framework
+
+# One-shot prompt
+python -m agent_framework prompt "Explain this codebase"
+
+# With model selection
+python -m agent_framework --model sonnet prompt "Review this code"
+
+# Session resume
+python -m agent_framework --resume latest /doctor
+```
+
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [PHILOSOPHY.md](./docs/PHILOSOPHY.md) | Project intent, system design rationale |
+| [ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Technical architecture deep-dive |
+| [DESIGN.md](./docs/DESIGN.md) | Design decisions and patterns |
+| [ROADMAP.md](./docs/ROADMAP.md) | Current status and future roadmap |
+
+## Ecosystem
+
+This framework is inspired by and integrates with:
+
+- [claw-code](https://github.com/ultraworkers/claw-code) — Rust CLI agent harness
+- [oh-my-codex](https://github.com/Yeachan-Heo/oh-my-codex) — Workflow layer for agent coordination
+- [clawhip](https://github.com/Yeachan-Heo/clawhip) — Event and notification router
+- [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) — Multi-agent coordination
 
 ## License
 
