@@ -157,3 +157,49 @@ This framework is inspired by and integrates with:
 ## License
 
 MIT
+
+---
+
+## v1.1.0 新特性（基于 Claw Code 思路）
+
+### 🆕 LLM Provider 抽象层
+
+```python
+from agent_framework import Agent, create_provider
+
+# 自动路由到 Anthropic/OpenAI/xAI/DashScope
+agent = Agent(name="dev", model="sonnet")
+```
+
+### 🛠️ 8 个真实可执行工具
+
+| 工具 | 说明 |
+|------|------|
+| `bash` | 执行 Shell 命令 |
+| `read` | 读取文件 |
+| `write` | 写入文件 |
+| `edit` | 编辑文件（替换） |
+| `grep` | 正则搜索 |
+| `glob` | 文件匹配 |
+| `web_search` | 网页搜索 |
+| `web_fetch` | 抓取网页 |
+
+### 🤖 LLM 驱动的任务规划
+
+```python
+from agent_framework import Planner
+planner = Planner(llm_provider)
+plan = await planner.plan("创建一个 REST API")
+```
+
+### 🧪 Mock Parity Harness
+
+```bash
+python -m agent_framework test
+```
+
+### 📊 /doctor 健康检查
+
+```bash
+python -m agent_framework doctor
+```

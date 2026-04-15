@@ -77,7 +77,7 @@ class Permission:
     mode: PermissionMode = PermissionMode.READ_ONLY
     workspace_root: str = "."
     allowed_paths: Set[str] = field(default_factory=set)
-    denied_paths: Set[str] = field=set
+    denied_paths: Set[str] = field(default_factory=set)
     allowed_commands: Set[str] = field(default_factory=set)
     denied_commands: Set[str] = field(default_factory=set)
 

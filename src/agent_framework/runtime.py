@@ -152,6 +152,7 @@ class AgentRuntime:
         name: str = "agent",
         version: str = "1.0.0",
         llm_client: Optional[Any] = None,
+        model: str = "sonnet",
         event_bus: Optional[EventBus] = None,
         session_manager: Optional[SessionManager] = None,
         task_manager: Optional[TaskManager] = None,
@@ -160,6 +161,9 @@ class AgentRuntime:
         self.name = name
         self.version = version
         self.llm_client = llm_client
+        self.model = model  # 新增：模型名称
+        self._planner = None  # 新增：LLM 规划器
+        self._llm_provider = None  # 新增：LLM Provider
 
         # Core components
         self.event_bus = event_bus or EventBus()
@@ -216,18 +220,39 @@ class AgentRuntime:
         config = config or {}
         self.logger.info(f"Setting up runtime: {self.name} v{self.version}")
 
-        # Import components lazily to avoid circular imports
+        # Import components lazily
         from .tool_pool import ToolPool
         from .skill_registry import SkillRegistry
         from .permission import PermissionEnforcer
 
         # Initialize components
-        self.tool_pool = ToolPool()
+        # 使用新的 create_default_pool() 获取真实可执行工具
+        try:
+            from .tools import create_default_pool
+            self.tool_pool = create_default_pool()
+            self.logger.info(f"Loaded {len(self.tool_pool.list_all())} tools from new tool pool")
+        except ImportError:
+            # 降级到原始 tool_pool
+            self.tool_pool = ToolPool()
+            self._register_default_tools()
+            self.logger.warning("Using legacy tool pool")
+
         self.skill_registry = SkillRegistry()
         self.permission_enforcer = PermissionEnforcer()
 
-        # Register default tools
-        self._register_default_tools()
+        # 初始化 LLM Provider（新增）
+        try:
+            from .providers import create_provider
+            self._llm_provider = create_provider(model=self.model)
+            # 初始化规划器
+            try:
+                from .planning import Planner
+                self._planner = Planner(self._llm_provider)
+                self.logger.info(f"LLM Provider initialized: {self._llm_provider.provider}")
+            except Exception as e:
+                self.logger.warning(f"Planner init failed: {e}")
+        except Exception as e:
+            self.logger.warning(f"LLM Provider init failed: {e} (will use mock if available)")
 
         # Register default skills
         self._register_default_skills()
@@ -239,7 +264,7 @@ class AgentRuntime:
         self.logger.info("Runtime setup complete")
 
     def _register_default_tools(self) -> None:
-        """Register built-in tools"""
+        """Register built-in tools (legacy, used as fallback)"""
         from .tools import (
             BashTool, ReadFileTool, WriteFileTool,
             EditFileTool, GlobSearchTool, GrepSearchTool
@@ -251,6 +276,7 @@ class AgentRuntime:
         self.tool_pool.register(EditFileTool())
         self.tool_pool.register(GlobSearchTool())
         self.tool_pool.register(GrepSearchTool())
+        self.logger.info("Registered legacy tools")
 
     def _register_default_skills(self) -> None:
         """Load built-in skills from skills/ directory"""
@@ -471,10 +497,18 @@ class AgentRuntime:
 
     async def _step_generate_code(self, query: str, context: ExecutionContext) -> dict:
         """Generate code using LLM if available"""
-        if self.llm_client:
-            # Use LLM for code generation
-            return {"generated": True, "llm_used": True}
-        return {"generated": False, "reason": "No LLM client configured"}
+        if self._llm_provider:
+            try:
+                from .providers.base import Message
+                messages = [
+                    Message(role="system", content="You are an expert Python programmer. Generate clean, well-documented code based on the request."),
+                    Message(role="user", content=f"Task: {query}\n\nGenerate the code:")
+                ]
+                response = await self._llm_provider.chat(messages, max_tokens=4096)
+                return {"generated": True, "content": response.content, "llm_used": True}
+            except Exception as e:
+                return {"generated": False, "error": str(e)}
+        return {"generated": False, "reason": "No LLM provider configured (install aiohttp and set API key)"}
 
     async def _step_validate_syntax(self, query: str, context: ExecutionContext) -> dict:
         """Validate code syntax"""
